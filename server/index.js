@@ -133,12 +133,12 @@ function isHermesRunning() {
 }
 
 // ───── Poll State ─────
-async function pollState() {
+function pollState() {
   try {
     const sessionFile = getLatestSessionFile();
     const session = parseSessionActivity(sessionFile);
     const logs = readLatestLogs();
-    const running = await isHermesRunning();
+    const running = isHermesRunning();
 
     // Infer status from session activity
     let status = 'idle';
@@ -298,6 +298,7 @@ server.listen(WS_PORT, () => {
   console.log(`  HTTP state: http://localhost:${WS_PORT}/state`);
   console.log(`  Health: http://localhost:${WS_PORT}/health`);
   console.log(`  Watching: ${SESSIONS_DIR} + ${LOGS_DIR}`);
+  process.stdout.write('READY\n');
 });
 
 startWatchers();
