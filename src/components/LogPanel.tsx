@@ -1,7 +1,5 @@
-import React, { useRef, useMemo } from 'react';
-import { useFrame } from '@react-three/fiber';
+import React, { useMemo } from 'react';
 import { RoundedBox, Text, Html } from '@react-three/drei';
-import * as THREE from 'three';
 import type { LogEntry } from '../types';
 
 interface LogPanelProps {
@@ -9,14 +7,14 @@ interface LogPanelProps {
 }
 
 const LEVEL_COLORS: Record<string, string> = {
-  info: '#22c55e',
-  warn: '#f59e0b',
-  error: '#ef4444',
-  debug: '#6366f1',
+  INFO: '#22c55e',
+  WARN: '#f59e0b',
+  ERROR: '#ef4444',
+  DEBUG: '#6366f1',
 };
 
 function LogLine({ entry, index }: { entry: LogEntry; index: number }) {
-  const ts = new Date(entry.ts).toLocaleTimeString('es-CO', { hour12: false });
+  const ts = new Date(entry.timestamp).toLocaleTimeString('en-US', { hour12: false });
   const color = LEVEL_COLORS[entry.level] || '#94a3b8';
 
   return (
@@ -36,10 +34,11 @@ function LogLine({ entry, index }: { entry: LogEntry; index: number }) {
         maxWidth: '400px',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
+        width: '100%',
       }}>
         <span style={{ color: '#64748b' }}>{ts}</span>
         {' · '}
-        <span style={{ color }}>{entry.text}</span>
+        <span style={{ color }}>{entry.message}</span>
       </div>
     </Html>
   );
@@ -82,7 +81,7 @@ export function LogPanel({ logs }: LogPanelProps) {
 
       {/* Log lines */}
       {recentLogs.map((entry, i) => (
-        <LogLine key={`${entry.ts}-${i}`} entry={entry} index={i} />
+        <LogLine key={`${entry.id}`} entry={entry} index={i} />
       ))}
 
       {/* Footer with scroll hint */}

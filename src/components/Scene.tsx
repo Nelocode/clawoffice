@@ -2,10 +2,11 @@ import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Text, Html } from '@react-three/drei';
 import * as THREE from 'three';
+import type { HermesStatus } from '../types';
 
 interface SceneProps {
   connected: boolean;
-  status: string;
+  status: HermesStatus;
 }
 
 function GridFloor() {

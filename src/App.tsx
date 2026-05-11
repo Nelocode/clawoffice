@@ -4,11 +4,8 @@ import { Loader, OrbitControls } from '@react-three/drei';
 import { ClawOffice } from './scenes/ClawOffice';
 
 // --- Config ---
-// En producción, apuntar a:
-//   Hermes WebSocket: ws://localhost:11434/api/ws   (Ollama)
-//   Hermes REST:      http://localhost:3001/api/state
-const WS_ENDPOINT = import.meta.env.VITE_HERMES_WS || '';
-const POLL_INTERVAL = Number(import.meta.env.VITE_POLL_INTERVAL) || 3000;
+// WS endpoint configurado via VITE_HERMES_WS en build-time
+// HTTP polling configurado via VITE_POLL_INTERVAL (default: 5000ms)
 
 function LoadingFallback() {
   return (
@@ -69,10 +66,7 @@ export default function App() {
             target={[0, 0.5, 0]}
           />
 
-          <ClawOffice
-            endpoint={WS_ENDPOINT || undefined}
-            pollInterval={POLL_INTERVAL}
-          />
+          <ClawOffice />
         </Canvas>
 
         <Loader

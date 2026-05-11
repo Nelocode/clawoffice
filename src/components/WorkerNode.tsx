@@ -2,7 +2,7 @@ import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Text, Float, Html } from '@react-three/drei';
 import * as THREE from 'three';
-import type { HermesWorker, HermesStatus } from '../types';
+import type { WorkerInfo, HermesStatus } from '../types';
 
 const STATUS_COLORS: Record<HermesStatus, string> = {
   idle: '#4a5568',       // gray
@@ -63,7 +63,7 @@ function WorkerCapsule({ status, progress }: { status: HermesStatus; progress?: 
   });
 
   // Progress ring
-  const progressAngle = (progress ?? 0) / 100 * Math.PI * 2;
+  const progressAngle = (progress ?? 0) * Math.PI * 2;
   const progressPoints = useMemo(() => {
     const pts: THREE.Vector3[] = [];
     const segments = 32;
@@ -115,7 +115,7 @@ function WorkerCapsule({ status, progress }: { status: HermesStatus; progress?: 
 }
 
 interface WorkerNodeProps {
-  worker: HermesWorker;
+  worker: WorkerInfo;
   position: [number, number, number];
 }
 
@@ -154,7 +154,7 @@ export function WorkerNode({ worker, position }: WorkerNodeProps) {
           backdropFilter: 'blur(4px)',
         }}>
           {STATUS_EMOJI[worker.status]} {worker.status}
-          {worker.progress && worker.progress > 0 ? ` ${Math.round(worker.progress)}%` : ''}
+          {worker.progress && worker.progress > 0 ? ` ${Math.round(worker.progress * 100)}%` : ''}
         </div>
       </Html>
     </group>

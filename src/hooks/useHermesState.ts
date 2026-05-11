@@ -1,114 +1,188 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import type { HermesState, HermesStatus } from '../types';
+import type { HermesState, HermesStatus, WorkerInfo, LogEntry } from '../types';
 
-// --- SIMULATED STATE FOR DEMO ---
-// En producción, reemplazar con WebSocket real al backend de Hermes
-function generateMockState(): HermesState {
-  const workers = [
-    { id: 'w1', name: 'Scrum Master', skill: 'code-scrum-master', status: 'idle' as HermesStatus, logs: [], progress: 0 },
-    { id: 'w2', name: 'Frontend Builder', skill: 'code-frontend-builder', status: 'idle' as HermesStatus, logs: [], progress: 0 },
-    { id: 'w3', name: 'Backend Builder', skill: 'code-backend-builder', status: 'idle' as HermesStatus, logs: [], progress: 0 },
-    { id: 'w4', name: 'Auditor', skill: 'code-auditor', status: 'idle' as HermesStatus, logs: [], progress: 0 },
-    { id: 'w5', name: 'Test Guardian', skill: 'code-test-guardian', status: 'idle' as HermesStatus, logs: [], progress: 0 },
-    { id: 'w6', name: 'Youtube Watchdog', skill: 'cgnt-youtube-watchdog', status: 'idle' as HermesStatus, logs: [], progress: 0 },
-  ];
-
-  return {
-    status: 'idle',
-    message: 'Hermes Agent listo',
-    sessionId: 'ses-' + Math.random().toString(36).slice(2, 8),
-    uptime: Date.now() - 1715000000000,
-    workers,
-    recentLogs: [
-      { ts: Date.now() - 5000, level: 'info', text: 'Hermes Agent iniciado' },
-      { ts: Date.now() - 3000, level: 'info', text: 'Skills cargados: code-*, cgnt-*' },
-    ],
-    lastUpdated: Date.now(),
-  };
+interface ConnectionConfig {
+  wsUrl?: string;
+  httpUrl?: string;
+  pollingInterval?: number;
+  autoConnect?: boolean;
 }
 
-interface UseHermesOptions {
-  endpoint?: string;
-  pollInterval?: number;
-}
+const DEFAULT_CONFIG: ConnectionConfig = {
+  wsUrl: `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:4099`,
+  httpUrl: `${window.location.protocol}//${window.location.hostname}:4099`,
+  pollingInterval: 5000,
+  autoConnect: true,
+};
 
-export function useHermesState(opts: UseHermesOptions = {}) {
-  const { pollInterval = 3000 } = opts;
-  const [state, setState] = useState<HermesState>(generateMockState);
-  const [connected, setConnected] = useState(false);
+const DEFAULT_WORKERS: WorkerInfo[] = [
+  { id: 'hermes-core', name: 'Hermes Core', status: 'idle', progress: 0, currentTask: 'Starting...', lastActive: new Date().toISOString() },
+  { id: 'session-writer', name: 'Session Store', status: 'idle', progress: 0, currentTask: 'Initializing...', lastActive: new Date().toISOString() },
+  { id: 'log-watcher', name: 'Log Collector', status: 'idle', progress: 0, currentTask: 'Standing by', lastActive: new Date().toISOString() },
+];
+
+const STATUS_PRIORITY: Record<HermesStatus, number> = {
+  'error': 0,
+  'executing': 1,
+  'thinking': 2,
+  'waiting': 3,
+  'idle': 4,
+};
+
+export function useHermesState(config: ConnectionConfig = {}) {
+  const cfg = { ...DEFAULT_CONFIG, ...config };
   const wsRef = useRef<WebSocket | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
+  const pollTimer = useRef<ReturnType<typeof setInterval>>();
+  const mountedRef = useRef(true);
+  const reconnectAttempts = useRef(0);
 
-  // WebSocket connection
-  const connect = useCallback(() => {
-    if (!opts.endpoint) return; // no WS available, fallback to polling
-    const ws = new WebSocket(opts.endpoint);
-    ws.onopen = () => setConnected(true);
-    ws.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        setState(prev => ({ ...prev, ...data, lastUpdated: Date.now() }));
-      } catch { /* ignore malformed */ }
-    };
-    ws.onclose = () => setConnected(false);
-    ws.onerror = () => setConnected(false);
-    wsRef.current = ws;
-  }, [opts.endpoint]);
+  const [state, setState] = useState<HermesState>({
+    status: 'idle',
+    workers: DEFAULT_WORKERS,
+    logs: [],
+    session: null,
+    connected: false,
+    hermesVersion: 'Connecting...',
+    uptime: 0,
+  });
 
-  // Polling fallback / mock
-  useEffect(() => {
-    if (opts.endpoint) {
-      connect();
-      return () => { wsRef.current?.close(); };
+  // ───── Update helpers ─────
+  const mergeState = useCallback((partial: Partial<HermesState>) => {
+    setState(prev => {
+      const updated = { ...prev, ...partial };
+      // Determine global status from workers
+      const activeWorkers = updated.workers.filter(w => w.status !== 'idle');
+      if (activeWorkers.length > 0) {
+        const highestPriority = activeWorkers.reduce((best, w) =>
+          STATUS_PRIORITY[w.status] < STATUS_PRIORITY[best.status] ? w : best
+        );
+        updated.status = highestPriority.status;
+      } else {
+        updated.status = updated.connected ? 'idle' : 'error';
+      }
+      return updated;
+    });
+  }, []);
+
+  // ───── WebSocket connection ─────
+  const connectWebSocket = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+    try {
+      const ws = new WebSocket(cfg.wsUrl!);
+
+      ws.onopen = () => {
+        reconnectAttempts.current = 0;
+        mergeState({ connected: true, hermesVersion: 'connected' });
+        // Request initial state
+        ws.send(JSON.stringify({ type: 'request_state' }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'state' && msg.payload) {
+            const p = msg.payload;
+            mergeState({
+              status: p.status || 'idle',
+              workers: p.workers || DEFAULT_WORKERS,
+              logs: p.logs || [],
+              session: p.session || null,
+              lastActivity: p.lastActivity || null,
+              connected: true,
+              hermesVersion: p.hermesVersion || 'connected',
+              uptime: p.uptime || 0,
+            });
+          }
+        } catch {
+          // ignore parse errors
+        }
+      };
+
+      ws.onclose = () => {
+        mergeState({ connected: false });
+        wsRef.current = null;
+
+        // Auto reconnect with backoff
+        if (mountedRef.current && reconnectAttempts.current < 10) {
+          const delay = Math.min(1000 * 2 ** reconnectAttempts.current, 30000);
+          reconnectAttempts.current += 1;
+          reconnectTimer.current = setTimeout(connectWebSocket, delay);
+        }
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+
+      wsRef.current = ws;
+    } catch {
+      // WebSocket not available, fall back to polling
+      mergeState({ connected: false });
     }
-    // Mock: simulate state changes
-    setConnected(true);
-    intervalRef.current = setInterval(() => {
-      setState(prev => {
-        // Round-robin workers through states
-        const tick = Date.now();
-        const updated = prev.workers.map((w, i) => {
-          const phase = Math.floor(tick / 2000 + i) % 5;
-          const statuses: HermesStatus[] = ['idle', 'thinking', 'executing', 'thinking', 'idle'];
-          const msgs: Record<HermesStatus, string> = {
-            idle: 'Waiting',
-            thinking: `Analizando tarea #${Math.floor(tick / 5000) % 10}...`,
-            executing: `Ejecutando paso ${phase * 20}%`,
-            error: 'Error',
-            waiting: 'En cola',
-          };
-          return {
-            ...w,
-            status: statuses[phase],
-            progress: phase === 2 ? Math.min(100, (tick % 8000) / 80) : 0,
-            message: msgs[statuses[phase]],
-          };
-        });
+  }, [cfg.wsUrl, mergeState]);
 
-        const now = Date.now();
-        return {
-          ...prev,
-          workers: updated,
-          status: updated.some(w => w.status === 'executing') ? 'executing' as HermesStatus
-                : updated.some(w => w.status === 'thinking') ? 'thinking' as HermesStatus
-                : 'idle' as HermesStatus,
-          message: updated.some(w => w.status === 'executing') ? 'Pipeline activo' : 'En espera',
-          recentLogs: [
-            ...prev.recentLogs.slice(-50),
-            ...updated
-              .filter(w => w.status !== 'idle')
-              .map(w => ({ ts: now, level: 'info' as const, text: `[${w.name}] ${w.message}`, workerId: w.id })),
-          ],
-          lastUpdated: now,
-        };
+  // ───── HTTP polling fallback ─────
+  const pollHttpState = useCallback(async () => {
+    try {
+      const res = await fetch(`${cfg.httpUrl}/state`);
+      if (!res.ok) return;
+      const p = await res.json();
+      mergeState({
+        status: p.status || 'idle',
+        workers: p.workers || DEFAULT_WORKERS,
+        logs: p.logs || [],
+        session: p.session || null,
+        lastActivity: p.lastActivity || null,
+        connected: true,
+        hermesVersion: p.hermesVersion || 'connected',
+        uptime: p.uptime || 0,
       });
-    }, pollInterval);
+    } catch {
+      mergeState({ connected: false });
+    }
+  }, [cfg.httpUrl, mergeState]);
+
+  // ───── Lifecycle ─────
+  useEffect(() => {
+    mountedRef.current = true;
+
+    if (cfg.autoConnect !== false) {
+      connectWebSocket();
+
+      // Fallback polling if WS fails
+      pollTimer.current = setInterval(() => {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          pollHttpState();
+        }
+      }, cfg.pollingInterval);
+    }
 
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      wsRef.current?.close();
+      mountedRef.current = false;
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
+      }
+      if (pollTimer.current) {
+        clearInterval(pollTimer.current);
+      }
     };
-  }, [connect, pollInterval, opts.endpoint]);
+  }, [cfg.autoConnect, cfg.pollingInterval, connectWebSocket, pollHttpState]);
 
-  return { state, connected };
+  // ───── Keepalive ping ─────
+  useEffect(() => {
+    const ping = setInterval(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 15000);
+    return () => clearInterval(ping);
+  }, []);
+
+  return state;
 }

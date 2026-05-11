@@ -1,30 +1,38 @@
-// Tipos compartidos para el estado de Hermes Agent
+// ───── Estado de Hermes Agent ─────
 export type HermesStatus = 'idle' | 'thinking' | 'executing' | 'error' | 'waiting';
 
-export interface HermesWorker {
+export interface WorkerInfo {
   id: string;
   name: string;
-  skill: string;
   status: HermesStatus;
-  progress?: number;       // 0–100
-  startedAt?: number;
-  message?: string;
-  logs: LogEntry[];
+  progress: number;       // 0–1
+  currentTask: string;
+  lastActive: string;     // ISO timestamp
 }
 
 export interface LogEntry {
-  ts: number;
-  level: 'info' | 'warn' | 'error' | 'debug';
-  text: string;
-  workerId?: string;
+  id: string;
+  timestamp: string;
+  level: string;          // INFO, WARN, ERROR, DEBUG
+  message: string;
+  source: string;
+}
+
+export interface SessionInfo {
+  title: string;
+  lastMessage: string;
+  lastRole: string;
+  totalMessages: number;
+  lastUpdated: string;
 }
 
 export interface HermesState {
   status: HermesStatus;
-  message: string;
-  sessionId: string;
+  workers: WorkerInfo[];
+  logs: LogEntry[];
+  session: SessionInfo | null;
+  connected: boolean;
+  hermesVersion: string;
   uptime: number;
-  workers: HermesWorker[];
-  recentLogs: LogEntry[];
-  lastUpdated: number;
+  lastActivity?: string | null;
 }
